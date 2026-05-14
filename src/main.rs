@@ -244,12 +244,16 @@ fn find_first_digit(haystack: &[u8]) -> Option<usize> {
             let chunk = vld1q_u8(ptr.add(i));
             let diff = vsubq_u8(chunk, zero30); // wraps for non-digits
             let mask = vcltq_u8(diff, ten);     // 0xFF where digit, 0x00 else
-            if vmaxvq_u8(mask) != 0 {
-                for j in 0..16 {
-                    if is_digit(*ptr.add(i + j)) {
-                        return Some(i + j);
-                    }
-                }
+            // NEON movemask substitute: `vshrn_n_u16(mask, 4)` packs each
+            // pair of byte-mask lanes into one nibble pair (high nibble =
+            // high byte's bits, low nibble = low byte's). The resulting u64
+            // has a nonzero nibble exactly where the source byte matched;
+            // `trailing_zeros() / 4` == first matching byte index. One pop
+            // beats a 16-iter scalar confirm loop.
+            let narrow = vshrn_n_u16(vreinterpretq_u16_u8(mask), 4);
+            let bits = vget_lane_u64(vreinterpret_u64_u8(narrow), 0);
+            if bits != 0 {
+                return Some(i + bits.trailing_zeros() as usize / 4);
             }
             i += 16;
         }
@@ -271,14 +275,13 @@ fn find_first_non_digit(haystack: &[u8]) -> Option<usize> {
             let chunk = vld1q_u8(ptr.add(i));
             let diff = vsubq_u8(chunk, zero30);
             let mask = vcltq_u8(diff, ten);
-            // vminvq_u8 returns the min byte — if any lane is 0x00, there's a
-            // non-digit in this chunk.
-            if vminvq_u8(mask) == 0 {
-                for j in 0..16 {
-                    if !is_digit(*ptr.add(i + j)) {
-                        return Some(i + j);
-                    }
-                }
+            // Invert so 0xFF marks non-digits, then apply the same narrow-
+            // by-4 movemask substitute as `find_first_digit`.
+            let inv = vmvnq_u8(mask);
+            let narrow = vshrn_n_u16(vreinterpretq_u16_u8(inv), 4);
+            let bits = vget_lane_u64(vreinterpret_u64_u8(narrow), 0);
+            if bits != 0 {
+                return Some(i + bits.trailing_zeros() as usize / 4);
             }
             i += 16;
         }
