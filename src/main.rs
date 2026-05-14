@@ -1258,27 +1258,41 @@ fn mask_pan(pan: &[u8]) -> String {
 }
 
 fn write_csv(path: &Path, files: &[FileHits], unmask: bool) -> io::Result<(usize, usize)> {
+    use std::cmp::Reverse;
     let mut w = csv::Writer::from_path(path)?;
     w.write_record(["location", "offset", "scheme", "confidence", "pan"])?;
+
+    // Flatten + sort: confidence DESC, then path ASC, then offset ASC. High-
+    // confidence findings land at the top of the CSV so a reviewer triages
+    // strongest-evidence rows first. Within a tier, results group by file.
+    let mut rows: Vec<(&Path, &Hit)> = files
+        .iter()
+        .flat_map(|fh| fh.hits.iter().map(move |h| (fh.path.as_path(), h)))
+        .collect();
+    rows.sort_by(|(pa, ha), (pb, hb)| {
+        Reverse(ha.confidence)
+            .cmp(&Reverse(hb.confidence))
+            .then_with(|| pa.cmp(pb))
+            .then_with(|| ha.offset.cmp(&hb.offset))
+    });
+
     let mut total = 0;
-    for fh in files {
-        let loc = fh.path.to_string_lossy();
-        for h in &fh.hits {
-            let pan_str = if unmask {
-                String::from_utf8_lossy(&h.pan).into_owned()
-            } else {
-                mask_pan(&h.pan)
-            };
-            let scheme = h.scheme.map(|s| s.name()).unwrap_or("?");
-            w.write_record([
-                loc.as_ref(),
-                &h.offset.to_string(),
-                scheme,
-                h.confidence.name(),
-                &pan_str,
-            ])?;
-            total += 1;
-        }
+    for (loc_path, h) in &rows {
+        let loc = loc_path.to_string_lossy();
+        let pan_str = if unmask {
+            String::from_utf8_lossy(&h.pan).into_owned()
+        } else {
+            mask_pan(&h.pan)
+        };
+        let scheme = h.scheme.map(|s| s.name()).unwrap_or("?");
+        w.write_record([
+            loc.as_ref(),
+            &h.offset.to_string(),
+            scheme,
+            h.confidence.name(),
+            &pan_str,
+        ])?;
+        total += 1;
     }
     w.flush()?;
     Ok((files.len(), total))
@@ -1316,10 +1330,11 @@ struct Args {
     #[arg(long)]
     no_strict: bool,
 
-    /// Minimum confidence to emit. Default `low` matches the previous tool's
-    /// behavior. Use `medium` to drop weakly-supported hits, `high` for
-    /// hits with a card keyword in the immediate vicinity.
-    #[arg(long, value_enum, default_value_t = MinConfidence::Low)]
+    /// Minimum confidence to emit. Default `medium` drops weakly-supported
+    /// hits (no card keyword nearby, no recognized scheme). Use `low` to see
+    /// every Luhn+boundary survivor, `high` for hits with a card keyword in
+    /// the immediate vicinity.
+    #[arg(long, value_enum, default_value_t = MinConfidence::Medium)]
     min_confidence: MinConfidence,
 
     /// Skip files larger than N MB
