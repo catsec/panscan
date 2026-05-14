@@ -1363,6 +1363,12 @@ struct Args {
 
 fn main() {
     let mut args = Args::parse();
+    eprintln!("------------------------------");
+    eprintln!("  /\\_/\\    PANscan v{}", env!("CARGO_PKG_VERSION"));
+    eprintln!(" ( o.o )   Ram Prass");
+    eprintln!("  > ^ <    CATSEC");
+    eprintln!("------------------------------");
+    eprintln!();
 
     if args.path.is_none() && args.mode.is_none() {
         args.mode = Some(Mode::Quick);
@@ -1427,13 +1433,21 @@ fn main() {
     let strict = !args.no_strict;
 
     eprintln!(
-        "[+] Targets: {}   Workers: {}   Strict: {}   MinConf: {:?}   Debug: {}",
+        "[+] Targets: {}   Workers: {}   Strict: {}   Debug: {}",
         targets.len(),
         if args.threads == 0 { num_cpus() } else { args.threads },
         strict,
-        args.min_confidence,
         args.debug
     );
+    eprintln!(
+        "[+] Min-confidence: {}",
+        args.min_confidence.to_confidence().name()
+    );
+    if args.min_confidence != MinConfidence::Low {
+        eprintln!(
+            "    Re-run with --min-confidence low to see every Luhn+boundary survivor (more false positives)."
+        );
+    }
     if args.debug {
         eprintln!("[!] DEBUG: full unmasked PANs will be printed to stderr (PCI scope).");
     }
@@ -1472,6 +1486,7 @@ fn main() {
         let progress = progress.clone();
         let done = Arc::clone(&scan_done);
         thread::spawn(move || {
+            use std::io::Write;
             let mut last_milestone = 0;
             while !done.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(500));
@@ -1479,12 +1494,20 @@ fn main() {
                 let milestone = n / 10000;
                 if milestone > last_milestone {
                     last_milestone = milestone;
-                    eprintln!(
-                        "  scan: {} files scanned, {} with PANs",
+                    // \r returns to column 0, \x1b[K clears to end of line —
+                    // the line redraws in place instead of stacking.
+                    eprint!(
+                        "\r\x1b[K  scan: {} files scanned, {} with PANs",
                         human_count(n),
                         progress.files_with_hits.load(Ordering::Relaxed)
                     );
+                    let _ = std::io::stderr().flush();
                 }
+            }
+            // Terminate the in-place progress line so subsequent stderr
+            // output ("Done", error messages, etc.) starts on a fresh line.
+            if last_milestone > 0 {
+                eprintln!();
             }
         })
     };
