@@ -1,0 +1,30 @@
+# Rust build output
+/target
+
+# Local-only AI assistant guidance
+CLAUDE.md
+
+# Host-tuned / PGO binaries (non-portable, never committed)
+/panscan_native
+/panscan_pgo
+
+# Distribution binaries — published only as release artifacts
+/panscan_mac
+/panscan_mac_intel
+/panscan_linux_amd64
+/panscan_linux_arm64
+/panscan_windows.exe
+
+# Scan outputs
+panfind-*.csv
+*.csv
+
+# Local scan corpora / test logs
+log.txt
+
+# Editor / OS junk
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

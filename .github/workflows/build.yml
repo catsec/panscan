@@ -1,0 +1,84 @@
+name: build
+
+# Manual trigger only — releases are cut manually with the four binaries
+# produced by ./build-all.sh, see README.
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            outname: panscan_mac
+            rustflags: ''
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            outname: panscan_linux_amd64
+            rustflags: '-C target-cpu=x86-64-v3'
+            musl: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            outname: panscan_linux_arm64
+            rustflags: ''
+            musl: true
+            cross: true
+          - target: x86_64-pc-windows-gnu
+            os: ubuntu-latest
+            outname: panscan_windows.exe
+            rustflags: '-C target-cpu=x86-64-v3'
+            zigbuild: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.musl && !matrix.cross
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --locked
+
+      - name: Install zig + cargo-zigbuild
+        if: matrix.zigbuild
+        run: |
+          sudo snap install zig --classic --beta
+          cargo install cargo-zigbuild --locked
+
+      - name: Build
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }}
+          elif [ "${{ matrix.zigbuild }}" = "true" ]; then
+            cargo zigbuild --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Rename
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp target/${{ matrix.target }}/release/panscan.exe dist/${{ matrix.outname }}
+          else
+            cp target/${{ matrix.target }}/release/panscan dist/${{ matrix.outname }}
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.outname }}
+          path: dist/*
