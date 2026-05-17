@@ -1259,7 +1259,35 @@ fn mask_pan(pan: &[u8]) -> String {
 
 fn write_csv(path: &Path, files: &[FileHits], unmask: bool) -> io::Result<(usize, usize)> {
     use std::cmp::Reverse;
-    let mut w = csv::Writer::from_path(path)?;
+    use std::fs::OpenOptions;
+
+    // Refuse to write through a symlink at the final path component. panscan
+    // requires root, and the default output name is a second-resolution
+    // timestamp in CWD, so a local non-root attacker on a multi-user box could
+    // otherwise pre-plant a symlink and have us truncate /etc/passwd or
+    // /etc/sudoers as root. O_NOFOLLOW on the open is atomic; the Windows
+    // symlink_metadata check has a TOCTOU window but creating Windows symlinks
+    // requires admin or developer mode, narrowing the practical risk.
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(meta) = std::fs::symlink_metadata(path) {
+            if meta.file_type().is_symlink() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "refusing to write CSV through a symlink",
+                ));
+            }
+        }
+    }
+    let file = opts.open(path)?;
+    let mut w = csv::Writer::from_writer(file);
     w.write_record(["location", "offset", "scheme", "confidence", "pan"])?;
 
     // Flatten + sort: confidence DESC, then path ASC, then offset ASC. High-
