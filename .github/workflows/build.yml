@@ -61,18 +61,21 @@ jobs:
         if: matrix.upx
         run: sudo apt-get update && sudo apt-get install -y upx-ucl
 
-      - name: Build (size-min via build-std + panic_immediate_abort)
+      # `-C panic=immediate-abort` is the modern spelling of the old
+      # `panic_immediate_abort` build-std feature; nightly promoted it to a
+      # real panic strategy and now requires it in RUSTFLAGS rather than as
+      # a build-std feature. It still needs `-Z build-std=std,panic_abort`
+      # to rebuild std + panic_abort with the strategy applied.
+      - name: Build (size-min via build-std + panic=immediate-abort)
         env:
-          RUSTFLAGS: ${{ matrix.rustflags }}
+          RUSTFLAGS: "${{ matrix.rustflags }} -Z unstable-options -C panic=immediate-abort"
         run: |
           if [ "${{ matrix.zigbuild }}" = "true" ]; then
             cargo zigbuild --release --target ${{ matrix.target }} \
-              -Z build-std=std,panic_abort \
-              -Z build-std-features=panic_immediate_abort
+              -Z build-std=std,panic_abort
           else
             cargo build --release --target ${{ matrix.target }} \
-              -Z build-std=std,panic_abort \
-              -Z build-std-features=panic_immediate_abort
+              -Z build-std=std,panic_abort
           fi
 
       - name: Stage binary

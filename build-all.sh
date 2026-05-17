@@ -8,8 +8,8 @@
 #
 # Size pipeline (matches .github/workflows/build.yml):
 #   - nightly toolchain + rust-src
-#   - `-Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort`
-#     rebuilds std with panic messages stripped (~10-20% off)
+#   - `-Z build-std=std,panic_abort` + `-C panic=immediate-abort` in
+#     RUSTFLAGS rebuilds std with panic messages stripped (~10-20% off)
 #   - UPX --best --lzma on Linux + Windows binaries (~50-60% off)
 #   - aarch64-apple-darwin is left uncompressed (Mach-O packing is flaky on
 #     Apple Silicon — Gatekeeper / loader edge cases)
@@ -54,7 +54,8 @@ for row in "${TARGETS[@]}"; do
     rustup +nightly target add "$triple" >/dev/null
 done
 
-BUILDSTD=(-Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort)
+BUILDSTD=(-Z build-std=std,panic_abort)
+PANIC_FLAGS="-Z unstable-options -C panic=immediate-abort"
 
 for row in "${TARGETS[@]}"; do
     read -r triple out builder upx_flag <<< "$row"
@@ -65,8 +66,8 @@ for row in "${TARGETS[@]}"; do
     # needed there. The Windows binary relies on the Universal CRT shipped
     # with Windows 10 / Server 2016 and later — older Windows isn't supported.
     case "$triple" in
-        x86_64-*) export RUSTFLAGS="-C target-cpu=x86-64-v3" ;;
-        *)        unset RUSTFLAGS ;;
+        x86_64-*) export RUSTFLAGS="-C target-cpu=x86-64-v3 $PANIC_FLAGS" ;;
+        *)        export RUSTFLAGS="$PANIC_FLAGS" ;;
     esac
 
     case "$builder" in
