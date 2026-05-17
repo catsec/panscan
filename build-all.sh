@@ -9,10 +9,13 @@
 # Size pipeline (matches .github/workflows/build.yml):
 #   - nightly toolchain + rust-src
 #   - `-Z build-std=std,panic_abort` + `-C panic=immediate-abort` in
-#     RUSTFLAGS rebuilds std with panic messages stripped (~10-20% off)
-#   - UPX --best --lzma on Linux + Windows binaries (~50-60% off)
-#   - aarch64-apple-darwin is left uncompressed (Mach-O packing is flaky on
-#     Apple Silicon — Gatekeeper / loader edge cases)
+#     RUSTFLAGS rebuilds std with panic messages stripped (~25% off vs
+#     stable release)
+#
+# UPX compression was tried (v1.1.3) and removed: Microsoft Defender's ML
+# heuristic flagged the UPX'd Windows binary as Trojan:Win32/Wacatac.B!ml
+# — the packer is the trigger, the binary is clean. For a tool auditors
+# run on customer machines, AV quarantine on contact is a non-starter.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -20,12 +23,6 @@ cd "$(dirname "$0")"
 if ! command -v cargo-zigbuild >/dev/null 2>&1; then
     echo "error: cargo-zigbuild not found"
     echo "install with: brew install zig && cargo install cargo-zigbuild"
-    exit 1
-fi
-
-if ! command -v upx >/dev/null 2>&1; then
-    echo "error: upx not found"
-    echo "install with: brew install upx"
     exit 1
 fi
 
@@ -41,16 +38,16 @@ if ! rustup +nightly component list --installed 2>/dev/null | grep -q '^rust-src
     exit 1
 fi
 
-# triple                          out                    builder      upx
+# triple                          out                    builder
 TARGETS=(
-    "aarch64-apple-darwin         panscan_mac            cargo        no"
-    "x86_64-unknown-linux-musl    panscan_linux_amd64    zigbuild     yes"
-    "aarch64-unknown-linux-musl   panscan_linux_arm64    zigbuild     yes"
-    "x86_64-pc-windows-gnu        panscan_windows.exe    zigbuild     yes"
+    "aarch64-apple-darwin         panscan_mac            cargo"
+    "x86_64-unknown-linux-musl    panscan_linux_amd64    zigbuild"
+    "aarch64-unknown-linux-musl   panscan_linux_arm64    zigbuild"
+    "x86_64-pc-windows-gnu        panscan_windows.exe    zigbuild"
 )
 
 for row in "${TARGETS[@]}"; do
-    read -r triple _ _ _ <<< "$row"
+    read -r triple _ _ <<< "$row"
     rustup +nightly target add "$triple" >/dev/null
 done
 
@@ -58,7 +55,7 @@ BUILDSTD=(-Z build-std=std,panic_abort)
 PANIC_FLAGS="-Z unstable-options -C panic=immediate-abort"
 
 for row in "${TARGETS[@]}"; do
-    read -r triple out builder upx_flag <<< "$row"
+    read -r triple out builder <<< "$row"
     echo "==> $triple"
 
     # x86-64-v3 enables AVX2/BMI1/BMI2/F16C (Intel Haswell+, AMD Excavator+,
@@ -81,11 +78,6 @@ for row in "${TARGETS[@]}"; do
     esac
 
     mv -f "$src" "./$out"
-
-    if [ "$upx_flag" = "yes" ]; then
-        upx --best --lzma "./$out" >/dev/null
-    fi
-
     echo "    -> ./$out"
 done
 
