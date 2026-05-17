@@ -5,6 +5,14 @@
 # Cross-compiles cleanly from a Mac for all four targets via zigbuild
 # (Linux musl-static + Windows mingw-gnu) plus the native cargo
 # aarch64-apple-darwin build.
+#
+# Size pipeline (matches .github/workflows/build.yml):
+#   - nightly toolchain + rust-src
+#   - `-Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort`
+#     rebuilds std with panic messages stripped (~10-20% off)
+#   - UPX --best --lzma on Linux + Windows binaries (~50-60% off)
+#   - aarch64-apple-darwin is left uncompressed (Mach-O packing is flaky on
+#     Apple Silicon — Gatekeeper / loader edge cases)
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -15,21 +23,41 @@ if ! command -v cargo-zigbuild >/dev/null 2>&1; then
     exit 1
 fi
 
-# triple                          out                    builder
+if ! command -v upx >/dev/null 2>&1; then
+    echo "error: upx not found"
+    echo "install with: brew install upx"
+    exit 1
+fi
+
+if ! rustup run nightly cargo --version >/dev/null 2>&1; then
+    echo "error: nightly toolchain not installed"
+    echo "install with: rustup toolchain install nightly"
+    exit 1
+fi
+
+if ! rustup +nightly component list --installed 2>/dev/null | grep -q '^rust-src'; then
+    echo "error: rust-src component not installed for nightly"
+    echo "install with: rustup +nightly component add rust-src"
+    exit 1
+fi
+
+# triple                          out                    builder      upx
 TARGETS=(
-    "aarch64-apple-darwin         panscan_mac            cargo"
-    "x86_64-unknown-linux-musl    panscan_linux_amd64    zigbuild"
-    "aarch64-unknown-linux-musl   panscan_linux_arm64    zigbuild"
-    "x86_64-pc-windows-gnu        panscan_windows.exe    zigbuild"
+    "aarch64-apple-darwin         panscan_mac            cargo        no"
+    "x86_64-unknown-linux-musl    panscan_linux_amd64    zigbuild     yes"
+    "aarch64-unknown-linux-musl   panscan_linux_arm64    zigbuild     yes"
+    "x86_64-pc-windows-gnu        panscan_windows.exe    zigbuild     yes"
 )
 
 for row in "${TARGETS[@]}"; do
-    read -r triple _ _ <<< "$row"
-    rustup target add "$triple" >/dev/null
+    read -r triple _ _ _ <<< "$row"
+    rustup +nightly target add "$triple" >/dev/null
 done
 
+BUILDSTD=(-Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort)
+
 for row in "${TARGETS[@]}"; do
-    read -r triple out builder <<< "$row"
+    read -r triple out builder upx_flag <<< "$row"
     echo "==> $triple"
 
     # x86-64-v3 enables AVX2/BMI1/BMI2/F16C (Intel Haswell+, AMD Excavator+,
@@ -42,8 +70,8 @@ for row in "${TARGETS[@]}"; do
     esac
 
     case "$builder" in
-        zigbuild) cargo zigbuild --release --target "$triple" ;;
-        cargo)    cargo build    --release --target "$triple" ;;
+        zigbuild) cargo +nightly zigbuild --release --target "$triple" "${BUILDSTD[@]}" ;;
+        cargo)    cargo +nightly build    --release --target "$triple" "${BUILDSTD[@]}" ;;
     esac
 
     case "$triple" in
@@ -52,6 +80,11 @@ for row in "${TARGETS[@]}"; do
     esac
 
     mv -f "$src" "./$out"
+
+    if [ "$upx_flag" = "yes" ]; then
+        upx --best --lzma "./$out" >/dev/null
+    fi
+
     echo "    -> ./$out"
 done
 

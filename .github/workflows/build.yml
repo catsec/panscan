@@ -17,38 +17,39 @@ jobs:
             os: macos-latest
             outname: panscan_mac
             rustflags: ''
+            zigbuild: false
+            upx: false
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             outname: panscan_linux_amd64
             rustflags: '-C target-cpu=x86-64-v3'
-            musl: true
+            zigbuild: true
+            upx: true
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             outname: panscan_linux_arm64
             rustflags: ''
-            musl: true
-            cross: true
+            zigbuild: true
+            upx: true
           - target: x86_64-pc-windows-gnu
             os: ubuntu-latest
             outname: panscan_windows.exe
             rustflags: '-C target-cpu=x86-64-v3'
             zigbuild: true
+            upx: true
 
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      # Nightly + rust-src is required for `-Z build-std`, which rebuilds the
+      # standard library with `panic_immediate_abort` — this strips panic
+      # message formatting (saves ~10-20% on a small Rust binary) and shaves
+      # more dead code out of std than a normal release build can reach.
+      - name: Install Rust toolchain (nightly + rust-src)
+        uses: dtolnay/rust-toolchain@nightly
         with:
           targets: ${{ matrix.target }}
-
-      - name: Install musl tools
-        if: matrix.musl && !matrix.cross
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - name: Install cross
-        if: matrix.cross
-        run: cargo install cross --locked
+          components: rust-src
 
       - name: Install zig + cargo-zigbuild
         if: matrix.zigbuild
@@ -56,19 +57,25 @@ jobs:
           sudo snap install zig --classic --beta
           cargo install cargo-zigbuild --locked
 
-      - name: Build
+      - name: Install UPX
+        if: matrix.upx
+        run: sudo apt-get update && sudo apt-get install -y upx-ucl
+
+      - name: Build (size-min via build-std + panic_immediate_abort)
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
         run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
-          elif [ "${{ matrix.zigbuild }}" = "true" ]; then
-            cargo zigbuild --release --target ${{ matrix.target }}
+          if [ "${{ matrix.zigbuild }}" = "true" ]; then
+            cargo zigbuild --release --target ${{ matrix.target }} \
+              -Z build-std=std,panic_abort \
+              -Z build-std-features=panic_immediate_abort
           else
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --release --target ${{ matrix.target }} \
+              -Z build-std=std,panic_abort \
+              -Z build-std-features=panic_immediate_abort
           fi
 
-      - name: Rename
+      - name: Stage binary
         shell: bash
         run: |
           mkdir -p dist
@@ -77,6 +84,17 @@ jobs:
           else
             cp target/${{ matrix.target }}/release/panscan dist/${{ matrix.outname }}
           fi
+          ls -lh dist/${{ matrix.outname }}
+
+      # UPX intentionally skipped for aarch64-apple-darwin: Mach-O packing on
+      # Apple Silicon has historically been flaky (Gatekeeper / loader edge
+      # cases) and the savings aren't worth field-debug pain on an
+      # already-small native binary.
+      - name: Compress with UPX (Linux + Windows only)
+        if: matrix.upx
+        run: |
+          upx --best --lzma dist/${{ matrix.outname }}
+          ls -lh dist/${{ matrix.outname }}
 
       - uses: actions/upload-artifact@v7
         with:
